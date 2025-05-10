@@ -7,7 +7,7 @@ and recall, XGBoost offered more semantically meaningful feature importance, ide
 with stronger applied thematic coherence. The models were compared using cross-validation and detailed 
 error analysis to understand differences in prediction behavior. The XGBoost model failed to 
 perform well on the test set, highlighting challenges with generalization and the limitations 
-of small, imbalanced datasets. The final version of this report is available under FINAL-PROJECT.pdf.
+of small, imbalanced datasets. The final version of this report is available under [FINAL-PROJECT.pdf](https://github.com/tanvimk21/STAT3106-Final-Project/blob/main/FINAL-PROJECT.pdf), and can be reproduced by knitting [Final Report.Rmd](https://github.com/tanvimk21/STAT3106-Final-Project/blob/main/FINAL%20PROJECT.Rmd)
 The code for exploratory data analysis, feature engineering, and model construction and comparison
 can be found under their respective .Rmd files. The data for this is only accessible by reaching
-out to me. 
+out to me as it was hand-curated by myself over the course of several months using archival materials. 
