@@ -1,0 +1,1302 @@
+---
+title: "FINAL PROJECT"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-04-16"
+---
+
+```{r, include = FALSE, echo=FALSE, message=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(broom)
+library(car)
+library(Metrics)
+library(caret)
+library(lubridate)
+library(tidyr)
+library(biglm)
+library(ranger)
+library(pROC)
+library(Matrix)
+library(glmnet)
+library(randomForest)
+library(readr) 
+library(stringr)
+library(reshape2)
+library(lubridate)
+library(rsample)
+library(text2vec)
+library(glmnet) 
+library(Matrix)
+library(caret) 
+library(tibble)
+library(text2vec)
+library(stopwords)
+library(stringr)
+library(tidytext)
+
+knitr::opts_chunk$set(fig.align = "center")
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+df <- read_csv("/Users/tanvi/Desktop/applied machine learning/APPLIED MACHINE LEARNING INDIRA GANDHI QUOTES DATABASE - Speeches in Parliament.csv")
+
+```
+# Introduction
+
+> In this machine learning project, I will be attempting to generate a natural language processing (NLP) model based on the work conducted for my senior thesis in Barnard's Sociology Department. This NLP project uses hand-curated quotes from a collection of speeches from the former Prime Minister of India, Indira Gandhi, to train a machine learning model that can classify political rhetoric into multiple thematic categories. While the audience for this project is rather targeted to my needs in my political and historical sociology studies, as I hope to be able to more quickly and efficiently code my data to make my analysis more robust and well-supported instead of doing it all by hand, this applied context is also useful for historians and other political sociologists interested in discourse analysis and/or the political trajectory of late 20th-century Indian politics, especially those who are looking to pursue more technologically-advanced forms of data collection. As such, the goal of this project is to be able to automate the coding of historical political text to generate multi-label classification of quotes and enable future large-scale analyses of rhetorical patterns that can be aided using scalable machine learning methods.
+
+***
+
+# XGBoost Model
+
+> The most impactful result in trying to generate a machine learning model that can classify historical political dialectic data, split at the quote/paragraph level, was an XGBoost model trained upon a matrix of TF-IDF vectorized quotes. The resulting model maintained somewhat meaningful performance metrics-- although, interestingly, it was largely outperformed on all metrics by a logistic regression model-- but also provided a clear competency in obtaining semantic insights into the words that most contributing to the assignment of certain codes. The tradeoff in performance metrics in favor of applied semantic meaning was an important decision I made in constructing this model that will be explored in depth below. This model (and the logistic model) entirely failed when applyed to the test set, which indicates that there is a lack of generalizability and a large degree of overfitting that occurred in my model training. While the model cannot be taken into an applied context (just yet), the results still provide meaningful insights into how machine learning algorithms can (potentially) illuminate the relevance of semantically meaningful words in relation to important and lofty social science themes. 
+
+# Exploratory Data Analysis
+
+> The data used to train this model consists of one single dataset that I manually created from a selection of published resources of Indira Gandhi’s speeches. The first set of resources is a catalogue of Independence Day speeches delivered by Indira Gandhi, which totals 15 transcripts, delivered between 1966 to 1975, followed by a gap during which the Janata Party was in power, and concluding with speeches from 1980 to 1984. The other– and more robust– selection of speeches comes from a published book of speeches Indira delivered in Parliament from 1966 to 1984, titled Indira Gandhi, Speeches in Parliament. These roughly 245 speeches were formally curated and published by the Lok Sabha secretariat in 1996. From these resources, I extracted quotes (herein referred to as “documents”) that ranged from about two sentences long to thirty sentences long, which can be roughly mapped onto paragraph lengths. 
+
+> Given the fact that the database was curated by me (and without this original project in mind), I have no doubts that there is surely some element of selection bias in how I chose the quotes to include in the set. A better version of this dataset which could have amounted to a more robust model would’ve likely come from including all the content of all the resource documents. Importantly, the documents I selected were only ones I deemed significant, and a truly robust model would have benefited from having unimportant documents, as well, as part of the significance of constructing a model such as this one is that the extraction can be done by the model instead of by the researcher only. The reason I still believe this model is meaningful is largely because of the structure of multi classification– technically, all documents are important because they all have an important code associated with them, but not all documents are important relative to each code. Thus, this still allows for a diversity in classifications that is necessary for such a model as all documents are “positives” for some codes, and “negatives” for others (but there are no documents that are all “negatives”). If I had more time in obtaining the data for this project, this is surely an element of the data acquisition I would’ve pursued. 
+
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+df <- df %>%
+  rename(CODES = 'POTENTIAL CODES') %>%
+  select(-NOTES)
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+glimpse(df)
+
+```
+
+```{r, echo = FALSE}
+set.seed(42)
+
+head(df[,c(1:5)])
+
+```
+> The preprocessed dataset (originally used for my senior thesis), as shown above, included columns for the date the speech was given, the source material (whether that be Independence Day Speeches or a specific chapter of the Indira Gandhi Speeches in Parliament book), the page number(s), the quote itself, plus the code(s) I manually assigned for the quote. The dataset was curated to be in chronological order, and is made of 304 unique documents (n = 304).
+
+```{r, echo = FALSE}
+set.seed(42)
+
+df <- df %>%
+  mutate(char_length = nchar(QUOTE),
+         word_count = str_count(QUOTE, "\\S+"))
+
+summary(df$word_count)
+
+# Optional histogram
+ggplot(df, aes(x = word_count)) +
+  geom_histogram(binwidth = 5) +
+  labs(title = "Distribution of Quote Lengths", x = "Word Count", y = "Number of Quotes")
+
+```
+
+> To ensure consistency in document granularity, I visualized the distribution of quote lengths. Most quotes fall between 40–120 words, with a median around 75 words. There is a small number of long outliers (up to 400+ words) and very little extremeley short quotes (under 20 words). There’s a strong central cluster in the 50–100 word range. As described earlier, there is a level of irregularity to be wary of in the construction of what constitutes a document, as there isn't a standard form such as the content of a whole speech might be. At the same time, though, the speeches themselves vary tremendously in length as well (and an element of the TF-IDF algorithm that will be used accounts for variation in document length to a certain extent). 
+
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+df <- df %>%
+  mutate(CODES = str_replace_all(CODES, "\\s*\\n\\s*", ", "),
+         code_list = str_split(CODES, ",\\s*"))
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+code_replacements <- c(
+  "backward" = "backwards",
+  "communalism (caste)" = "communalism",
+  "Center-state relations" = "center-state relations",
+  "some people" = "people",
+  "colonialism (?)" = "colonialism",
+  "local people" = "people",
+  "ordinary poeple" = "people",
+  "common people" = "people",
+  "party polarizatin" = "party polarization"
+)
+
+```
+
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+df2 <- df %>%
+  mutate(code_list = lapply(code_list, function(codes) {
+    corrected <- sapply(codes, function(x) {
+      if (x %in% names(code_replacements)) {
+        code_replacements[[x]]
+      } else {
+        x
+      }
+    })
+    unique(corrected)  # remove any accidental duplicates
+  }))
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+sort(unique(unlist(df2$code_list)))
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+df2 <- df2 %>%
+  mutate(code_list = lapply(code_list, function(x) {
+    x <- str_trim(x)                    # remove whitespace
+    x <- x[x != "" & !is.na(x)]         # remove blanks and NA
+    unique(x)                           # remove duplicates
+  }))
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+sort(unique(unlist(df2$code_list)))
+
+```
+
+```{r, echo = FALSE}
+set.seed(42)
+
+code_counts <- df2 %>%
+  unnest(code_list) %>%
+  filter(!is.na(code_list) & code_list != "") %>%
+  group_by(code_list) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+# Print
+print(code_counts)
+
+```
+
+```{r, echo = FALSE}
+set.seed(42)
+
+code_counts <- code_counts %>%
+  mutate(percent = count / sum(count) * 100)
+
+ggplot(code_counts, aes(x = reorder(code_list, percent), y = percent)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  labs(
+    title = "Proportion of Thematic Codes",
+    x = "Code",
+    y = "Percent of Quotes"
+  ) +
+  theme_minimal()
+
+
+```
+
+> The distribution of codes-- our target variables-- ranges from 1 document to 100 documents. Given the size of the dataset, while the p of the data is quite large, the n is rather small at just over 300. As such, there are surely issues with class imbalances and how robust our codes are, which means we must narrow down the codes we will be using to that which is actually trainable for a machine learning model. As such, the top eight codes **(nationalism, party polarization, democracy, communalism, Indian identity, colonialism, emotions, and people)** will be our target "y" variable.
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# Get codes with at least 10 quotes
+valid_codes <- code_counts %>%
+  filter(count >= 10) %>%
+  pull(code_list)
+
+# Filter each quote’s code_list to only include valid ones
+df3 <- df2 %>%
+  mutate(code_list = lapply(code_list, function(x) intersect(x, valid_codes)))
+
+# Optional: remove quotes with no remaining codes (since they won't train the model)
+df3 <- df3 %>%
+  filter(lengths(code_list) > 0)
+
+```
+
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# One-hot encoding
+
+# Get the list of codes you're including (e.g., those with ≥ 10 examples)
+code_names <- sort(unique(unlist(df3$code_list)))
+
+# Convert to binary columns
+for (code in code_names) {
+  clean_name <- str_replace_all(code, "[^[:alnum:]]+", "_")
+  df3[[clean_name]] <- sapply(df3$code_list, function(x) code %in% x)
+}
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# Select just the binary columns
+label_matrix <- df3 %>%
+  select(all_of(str_replace_all(code_names, "[^[:alnum:]]+", "_"))) %>%
+  as.matrix()
+
+# Co-occurrence = cross-product of the binary label matrix
+co_occurrence <- t(label_matrix) %*% label_matrix
+
+# Convert to proportion matrix if you like
+co_occurrence_prop <- co_occurrence / diag(co_occurrence)
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# Convert to long format
+co_occurrence_long <- melt(co_occurrence)
+names(co_occurrence_long) <- c("Code1", "Code2", "Count")
+
+# Plot
+ggplot(co_occurrence_long, aes(x = Code1, y = Code2, fill = Count)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  theme_minimal() +
+  labs(title = "Code Co-Occurrence Heatmap", x = "", y = "") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# Convert to Date (safely handles formats like "November 21, 1972")
+df3 <- df3 %>%
+  mutate(DATE = mdy(DATE))
+
+# Extract year for plotting
+df3 <- df3 %>%
+  mutate(YEAR = year(DATE))
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# Pivot longer to get one row per (year, code)
+df3_long <- df3 %>%
+  select(YEAR, all_of(str_replace_all(code_names, "[^[:alnum:]]+", "_"))) %>%
+  pivot_longer(-YEAR, names_to = "code", values_to = "present") %>%
+  filter(present == TRUE) %>%
+  group_by(YEAR, code) %>%
+  summarise(n = n(), .groups = "drop")
+
+# Plot
+ggplot(df3_long, aes(x = YEAR, y = n, fill = code)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Frequency of Themes by Year", x = "Year", y = "Number of Quotes") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+
+```
+
+***
+
+## Feature Engineering
+
+> In order to generate a trainable dataset, we must preprocess the data and conduct feature engineering. The dataset was first split into a 80-20 testing and training set with a stratified sampling method to ensure all codes were proportionally represented in the training and test sets. I then engineered the features by using a TF-IDF algorithm, which separated each quote into tokens (the features) that mapped onto one word, with capitalization, punctuation, and typical stopwords removed. Rare words (appear < 3 times) and overused words (appear in > 90% of quotes) were also removed. With the tokens as the columns, the TF-IDF matrix was populated by generating the product of the token’s frequency in that quote with the inverse of how frequently it appears across all quotes. 
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+df4 <- df3 %>%
+  mutate(label_count = lengths(code_list))
+
+df5 <- df4 %>%
+  mutate(clean_quote = QUOTE %>%
+           tolower() %>%
+           str_replace_all("[^a-z\\s]", "") %>%
+           str_replace_all("\\s+", " ") %>%
+           str_trim())
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# Step 2: Train/test split before feature engineering
+split <- initial_split(df5, prop = 0.8, strata = label_count)
+train_idx <- as.integer(split$in_id)
+test_idx <- setdiff(seq_len(nrow(df5)), train_idx)
+
+train_quotes <- df5$clean_quote[train_idx]
+test_quotes  <- df5$clean_quote[test_idx]
+
+```
+
+```{r, include = FALSE, echo=FALSE}
+set.seed(42)
+
+# Step 3: Tokenization setup
+prep_fun <- tolower
+stop_words <- stopwords("en")
+tok_fun <- function(x) {
+  tokens <- word_tokenizer(x)
+  lapply(tokens, function(words) words[!words %in% stop_words])
+}
+
+# Step 4: Tokenize + create vocabulary on training data
+it_train <- itoken(train_quotes, preprocessor = prep_fun, tokenizer = tok_fun)
+vocab <- create_vocabulary(it_train)
+vocab <- prune_vocabulary(vocab, term_count_min = 3, doc_proportion_max = 0.9)
+vectorizer <- vocab_vectorizer(vocab)
+
+# Step 5: Create TF-IDF matrices
+# Training
+dtm_train <- create_dtm(it_train, vectorizer)
+tfidf <- TfIdf$new()
+X_train <- tfidf$fit_transform(dtm_train)
+
+```
+
+> The target or Y matrix, as shown below, was made by doing one-hot encoding for all our target categories, in which columns are codes (like emotions, communalism_caste) and entries are 0 or 1 (whether that code applies to the quote). 
+
+```{r, echo = FALSE}
+set.seed(42)
+
+# Test (using same vocab and TF-IDF model)
+it_test <- itoken(test_quotes, preprocessor = prep_fun, tokenizer = tok_fun)
+dtm_test <- create_dtm(it_test, vectorizer)
+X_test <- tfidf$transform(dtm_test)
+
+# Step 6: Create multi-label Y matrices
+all_codes <- sort(unique(unlist(df5$code_list)))
+code_cols <- str_replace_all(all_codes, "[^[:alnum:]]+", "_")
+
+# Add binary indicator columns for each code
+df5[code_cols] <- lapply(all_codes, function(code) {
+  sapply(df5$code_list, function(x) as.integer(code %in% x))
+})
+
+Y_all <- as.matrix(df5[, code_cols])
+Y_train <- Y_all[train_idx, ]
+Y_test <- Y_all[test_idx, ]
+
+head(Y_train[,c(3,4,5,7,8,10,11, 12, 13)])
+```
+***
+
+# Model Selection & Comparison
+
+```{r LOGISTIC REGRESSION, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# LOGISTIC REGRESSION
+
+label_counts <- colSums(Y_all[train_idx, ])
+
+# Define labels to use (excluding rare ones)
+valid_labels <- names(label_counts[label_counts >= 15])
+
+# Initialize
+multi_cv_results <- list()
+multi_coef_df_list <- list()
+
+for (label in valid_labels) {
+  cat("\n===============================\n")
+  cat("Training multi-label model for:", label, "\n")
+  
+  y <- Y_all[train_idx, label]
+
+  # Cross-validated logistic regression
+  model <- cv.glmnet(X_train, y, family = "binomial", alpha = 0, nfolds = 5)
+  
+  # Predict on training set
+  probs <- predict(model, X_train, s = "lambda.min", type = "response")
+preds <- ifelse(probs > 0.3, 1, 0)
+  
+  # Confusion elements
+  TP <- sum(preds == 1 & y == 1)
+  FP <- sum(preds == 1 & y == 0)
+  FN <- sum(preds == 0 & y == 1)
+  TN <- sum(preds == 0 & y == 0)
+  
+  acc <- (TP + TN) / (TP + FP + FN + TN)
+  prec <- ifelse((TP + FP) == 0, NA, TP / (TP + FP))
+  rec  <- ifelse((TP + FN) == 0, NA, TP / (TP + FN))
+
+  # Save metrics
+  multi_cv_results[[label]] <- list(
+    accuracy = acc,
+    precision = prec,
+    recall = rec,
+    model = model
+  )
+
+  # Save top predictors
+  coefs <- as.matrix(coef(model, s = "lambda.min"))
+  coefs_df <- data.frame(term = rownames(coefs), coef = coefs[,1]) %>%
+    filter(term != "(Intercept)", coef != 0) %>%
+    arrange(desc(abs(coef))) %>%
+    mutate(label = label)
+  
+  multi_coef_df_list[[label]] <- coefs_df
+}
+
+```
+
+```{r RANDOM FOREST, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+
+# Create custom summary function to prioritize recall
+custom_summary <- function(data, lev = NULL, model = NULL) {
+  cm <- confusionMatrix(data$pred, data$obs, positive = "yes")
+  out <- c(
+    Accuracy = cm$overall["Accuracy"],
+    Recall = cm$byClass["Recall"],
+    Precision = cm$byClass["Precision"]
+  )
+  names(out) <- c("Accuracy", "Recall", "Precision")  # force naming
+  return(out)
+}
+
+# 1. Split First
+set.seed(42)
+split <- initial_split(df5, prop = 0.8, strata = label_count)
+train_idx <- as.integer(split$in_id)
+test_idx <- setdiff(seq_len(nrow(df5)), train_idx)
+
+train_texts <- df5$clean_quote[train_idx]
+test_texts <- df5$clean_quote[test_idx]
+
+# 2. Create TF-IDF Only on Training Data
+it_train <- itoken(train_texts, tokenizer = word_tokenizer, progressbar = TRUE)
+vocab <- create_vocabulary(it_train, stopwords = stop_words)
+vocab <- prune_vocabulary(vocab, term_count_min = 3, doc_proportion_max = 0.9)
+
+vectorizer <- vocab_vectorizer(vocab)
+dtm_train <- create_dtm(it_train, vectorizer)
+
+tfidf <- TfIdf$new()
+X_train_filtered <- tfidf$fit_transform(dtm_train)
+
+
+# Step 3: Modified For-Loop 
+new_rf_cv_results <- list()
+new_rf_importance_list <- list()
+
+set.seed(42)
+
+n_features_filtered <- ncol(X_train_filtered)
+mtry_vals <- unique(round(c(sqrt(n_features_filtered), log2(n_features_filtered), n_features_filtered * 0.05)))
+mtry_vals <- mtry_vals[mtry_vals > 0]
+
+rf_grid <- expand.grid(
+  mtry = mtry_vals,
+  splitrule = "gini",
+  min.node.size = c(1, 5, 10)
+)
+
+for (label in valid_labels) {
+  cat("\n===============================\n")
+  cat("Training new RF model (stopwords removed) for:", label, "\n")
+
+  y <- Y_all[train_idx, label]
+  num_pos <- sum(y == 1)
+
+  if (num_pos < 10) {
+    cat("Skipping", label, "- not enough positives for CV\n")
+    next
+  }
+
+  df_rf_filtered <- as.data.frame(as.matrix(X_train_filtered))
+  df_rf_filtered[[label]] <- factor(ifelse(y == 1, "yes", "no"), levels = c("no", "yes"))
+
+  f <- as.formula(paste(label, "~ ."))
+
+  fit_control <- trainControl(
+    method = "cv",
+    number = 5,
+    classProbs = TRUE,
+    summaryFunction = custom_summary,
+    savePredictions = "final",
+    sampling = "up"
+  )
+
+  rf_model <- tryCatch({
+    train(
+      f,
+      data = df_rf_filtered,
+      method = "ranger",
+      trControl = fit_control,
+      tuneGrid = rf_grid,
+      metric = "Recall",
+      importance = "impurity"
+    )
+  }, error = function(e) {
+    cat("Skipping", label, "- model error:", e$message, "\n")
+    return(NULL)
+  })
+
+  if (is.null(rf_model)) next
+
+  preds <- rf_model$pred
+  preds <- preds[preds$Resample == "Fold1", ]
+
+  cm <- confusionMatrix(preds$pred, preds$obs, positive = "yes")
+
+  new_rf_cv_results[[label]] <- list(
+    accuracy = cm$overall["Accuracy"],
+    precision = cm$byClass["Precision"],
+    recall = cm$byClass["Recall"],
+    model = rf_model
+  )
+
+  imp <- varImp(rf_model)$importance %>%
+    tibble::rownames_to_column("term") %>%
+    arrange(desc(Overall)) %>%
+    slice_max(order_by = Overall, n = 10) %>%
+    mutate(label = label)
+
+  new_rf_importance_list[[label]] <- imp
+}
+
+
+```
+
+```{r XGBOOST, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+
+# === Split First ===
+train_quotes <- df5$clean_quote[train_idx]
+test_quotes  <- df5$clean_quote[test_idx]
+
+# === Tokenization function ===
+prep_fun <- tolower
+stop_words <- stopwords("en")
+
+tok_fun <- function(x) {
+  tokens <- word_tokenizer(x)
+  lapply(tokens, function(words) {
+    words[!words %in% stop_words]
+  })
+}
+
+# === TF-IDF on Training Only ===
+it_train <- itoken(train_quotes, preprocessor = prep_fun, tokenizer = tok_fun, progressbar = TRUE)
+vocab_xgb <- create_vocabulary(it_train)
+vocab_xgb <- prune_vocabulary(vocab_xgb, term_count_min = 3, doc_proportion_max = 0.9)
+vectorizer_xgb <- vocab_vectorizer(vocab_xgb)
+dtm_train <- create_dtm(it_train, vectorizer_xgb)
+
+tfidf_xgb <- TfIdf$new()
+X_train_xgb <- tfidf_xgb$fit_transform(dtm_train)
+
+# === 2. TrainControl and Grid ===
+
+xgb_ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = function(data, lev = NULL, model = NULL) {
+    cm <- confusionMatrix(data$pred, data$obs, positive = "yes")
+    out <- c(
+      Accuracy = cm$overall["Accuracy"],
+      Recall = cm$byClass["Recall"],
+      Precision = cm$byClass["Precision"]
+    )
+    names(out) <- c("Accuracy", "Recall", "Precision")
+    return(out)
+  },
+  savePredictions = "final",
+  sampling = "up"
+)
+
+xgb_grid <- expand.grid(
+  nrounds = 50,          # fixed number of trees (or increase later)
+  eta = 0.3,             # learning rate
+  max_depth = 3,         # tree depth
+  gamma = 0,             # min loss reduction
+  colsample_bytree = 0.8,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+# === 3. For-loop across labels ===
+
+xgb_cv_results <- list()
+xgb_importance_list <- list()
+
+set.seed(42)
+
+for (label in valid_labels) {
+  cat("\n===============================\n")
+  cat("Training XGBoost model for:", label, "\n")
+
+  y <- Y_all[train_idx, label]
+  if (sum(y == 1) < 10) {
+    cat("Skipping", label, "- too few positives\n")
+    next
+  }
+
+  df_xgb <- as.data.frame(as.matrix(X_train_xgb))
+  df_xgb[[label]] <- factor(ifelse(y == 1, "yes", "no"), levels = c("no", "yes"))
+
+  f <- as.formula(paste(label, "~ ."))
+
+  xgb_model <- tryCatch({
+    train(
+      f,
+      data = df_xgb,
+      method = "xgbTree",
+      trControl = xgb_ctrl,
+      tuneGrid = xgb_grid,
+      metric = "Recall",
+      verbose = FALSE
+    )
+  }, error = function(e) {
+    cat("Skipping", label, "- model error:", e$message, "\n")
+    return(NULL)
+  })
+
+  if (is.null(xgb_model)) next
+
+preds <- xgb_model$pred
+preds <- preds[preds$Resample == "Fold1", ]  # or average across folds if desired
+
+# Use 0.3 threshold instead of 0.5
+preds$custom_pred <- ifelse(preds$yes >= 0.3, "yes", "no")
+
+cm <- confusionMatrix(
+  factor(preds$custom_pred, levels = c("no", "yes")),
+  preds$obs,
+  positive = "yes"
+)
+
+  xgb_cv_results[[label]] <- list(
+    accuracy = cm$overall["Accuracy"],
+    precision = cm$byClass["Precision"],
+    recall = cm$byClass["Recall"],
+    model = xgb_model
+  )
+
+  imp <- varImp(xgb_model)$importance %>%
+    rownames_to_column("term") %>%
+    arrange(desc(Overall)) %>%
+    slice_max(order_by = Overall, n = 10) %>%
+    mutate(label = label)
+
+  xgb_importance_list[[label]] <- imp
+}
+
+
+```
+
+> An essential componenent in selecting a model was in remembering what element to prioritize in the model's performance within this applied social science context. Recall is a very important metric to prioritize, as researchers (myself included) are not meant to use this model as a replacement for conducting actual coding; there is still an expectation that a human eye will be going over the results of the model. As such, accidentally including quotes that may not actually be relevant to the code is a permissable tradeoff in capturing all possible coded documents than being overly conservative in your positive guesses and missing what could’ve been important data in the first place.
+
+> The process of selecting the XGBoost model largely began with generating some form of a baseline model that can be assessed in comparison to further successive, more complex models. That initial model was a multilabel 5-fold cross-validated logistic regression model with an adjusted 0.3 cutoff threshold to generate higher recall performance for minority classes, trained upon a TF-IDF matrix without stopword removal (which is acceptable due to penalization of frequent terms in TF-IDF and regularization in logistic regression). This model performed very well on accuracy, precision, and recall metrics. 
+
+> After generating this logistic regression model, a 5-fold cross-validated random forest model was generated next, trained upon the stopword removed TF-IDF matrix, also utilizing an adjusted cutoff threshold of 0.3, and computed using upsampling methods to account for major class imbalances in many of the codes (as some codes only have 20-50 positive cases versus 200+ negative ones). This random forest model maintained such poor performance metrics all around the board that it was almost immedietly disregarded in favor of a more nuanced trees-based model via XGBoost, which could also handle imbalanced class data a bit more intuitively. The performance metrics for this random forest model are shown below. 
+
+```{r, echo = FALSE}
+set.seed(42)
+
+
+new_rf_summary_df <- tibble(
+  Label = names(new_rf_cv_results),
+  Accuracy = sapply(new_rf_cv_results, function(x) as.numeric(x$accuracy)),
+  Precision = sapply(new_rf_cv_results, function(x) as.numeric(x$precision)),
+  Recall = sapply(new_rf_cv_results, function(x) as.numeric(x$recall))
+)
+
+print(new_rf_summary_df)
+
+```
+> > The XGBoost model that I constructed was trained using 5-fold cross validation on TF-IDF features with stopword removal. Initially, it massively underperformed logistic regression across most metrics, but I was able to systematically improve its performance by using upsampling techniques (trainControl(sampling = "up")) to account for the major class imbalances, hyperparameter tuning with a manual grid (e.g. eta, max_depth, min_child_weight), and adjusting the threshold to 0.3 to reduce conservativeness and improve recall.
+
+> At this point, the decision process behind selecting a model largely came down to what I originally thought was just going to be my "reasonable but stupid" baseline model (logistic regression) and XGBoost. It is worth noting here that in comparing performance metrics across all the models I constructed, with hyperparameter tuning and otherwise, some codes systematically underperformed across the board. Specifically, **colonialism** and **people** maintained very poor precision and recall scores for all models, indicating that there may not be enough data for the models to pick up on meaningful signals for generating labels for those codes.
+
+```{r, echo = FALSE}
+set.seed(42)
+
+
+multi_summary_df <- tibble(
+  Label = valid_labels,
+  Accuracy = sapply(multi_cv_results, function(x) x$accuracy),
+  Precision = sapply(multi_cv_results, function(x) x$precision),
+  Recall = sapply(multi_cv_results, function(x) x$recall)
+)
+
+print(multi_summary_df)
+
+
+xgb_summary_df <- tibble(
+  Label = names(xgb_cv_results),
+  Accuracy = sapply(xgb_cv_results, function(x) as.numeric(x$accuracy)),
+  Precision = sapply(xgb_cv_results, function(x) as.numeric(x$precision)),
+  Recall = sapply(xgb_cv_results, function(x) as.numeric(x$recall))
+)
+
+print(xgb_summary_df)
+
+
+```
+
+>The performance metrics based on averages across the 5 folds of the train set for both the XGBoost model and logistic regression model highlight how **colonialism** and **people** consistently underperform, but also illuminates logistic regression’s impressive results. The performance metrics for XGBoost are not as poor as random forest but undoubtedly do not compare to that of logistic regression. I was automatically hesitant to see such perfect performance metrics for the logistic model, which makes me question whether there was a degree of overfitting or something of that sort with the model. But, with three codes maintaining recall scores of above 70%, there is some degree of merit to be found within the XGBoost model that I think could become a lot more workable with additional tuning measures. 
+
+> Thus, another important componenent that factored into the model selection was interpretability. In generating these performance metrics, I then generated the most important features for each model across all codes. For logistic regression, this was the top ten features with the largest magnitude Beta value for each code, while for XGBoost feature importance was calculated by quantifying the average improvement in the model's function when that feature is used (i.e. the features that contribute the most to improving model performance across all the decision trees in the ensemble when that feature is used to split). 
+
+```{r, echo = FALSE}
+set.seed(42)
+
+
+top_n <- 10  # number of top features per label
+
+# Combine top features from all labels
+log_importance_df <- bind_rows(
+  lapply(valid_labels, function(label) {
+    multi_coef_df_list[[label]] %>%
+      slice_max(order_by = abs(coef), n = top_n) %>%
+      mutate(label = label)
+  })
+)
+
+# Create the plot
+ggplot(log_importance_df, aes(x = reorder(term, coef), y = coef, fill = coef > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(~ label, scales = "free", ncol = 3) +
+  labs(
+    x = NULL,
+    y = "Logistic Regression Coefficient",
+    title = "Top TF-IDF Predictors per Code (Logistic Regression)"
+  ) +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick")) +
+  theme_minimal(base_size = 13) +
+  theme(
+  legend.position = "none",
+  axis.text.y = element_text(size = 7)  # adjust this number as needed
+)
+
+```
+
+```{r, echo = FALSE}
+set.seed(42)
+
+
+xgb_importance_df <- bind_rows(xgb_importance_list)
+
+ggplot(xgb_importance_df, aes(x = reorder(term, Overall), y = Overall)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  facet_wrap(~ label, scales = "free", ncol = 3) +
+  labs(
+    x = NULL,
+    y = "XGBoost Feature Importance",
+    title = "Top TF-IDF Predictors per Code (XGBoost)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none") +
+  theme(
+  legend.position = "none",
+  axis.text.y = element_text(size = 7)
+)
+
+```
+
+> The ability to compare and contrast the important features across the model provided very interesting insights that were particularly meaningful to me as a researcher who has been studying this content for nearly six months now. Both models provided features that were semantically meaningful in the context of the codes they are impacting, but by far XGBoost's important features cohered with my understanding of the dialectical construction of the codes as I manually classified them, capturing essential thematic patterns. For example, XGBoost's terms such as "movement," "independence," and "imperialism" have clear semiotic meaning in the context of **colonialism**, but the terms "beginning" and "dedication" have much looser connections to **colonialism**. Interestingly, even in a code such as **colonialism** which is poorly categorized for all models, XGBoost still is able to pick up on the meaningful connotation of the terms as it relates to the code even if it struggles to generalize and actually classify. Across the board, the important features generated by XGBoost cohere with what my research has concluded in my thesis-- for example, a notion of tradition and ancient history is essential for Indira Gandhi's construction of an Indian identity as she tries to move past the pitfalls of her father, the first Prime Minister of India, whose construction of national identity focused only on a modernist progressive future that ignored the reality of India's pre-colonial history which contains the communal identities that are pulling the people's allegience away from allegience to the nation. Thus, "tradition" and "ancient" being top features for **Indian_identity** indicates that this model is accurately generating an understanding of what discriminates certain codes from others, at least from the persepctive of the researcher. Similarly, **communalism** is a central issue for Indira Gandhi's tenure, one that she stringently ties to articulations of religion, region/place, and caste.  Additionally, she speaks of communalism almost entirely within the context of seeking solutions to such a problem, all of which are indicated by XGBoost's top features for that code. The top features for **democracy** in XGBoost cohere with conventional operational and infrastructural implementations of democracy.
+
+> At this point, I had to generate some sort of decision on these tradeoffs between my two models: on the one hand, the logistic model was wildly successful in most of its performance metrics, even for recall and precision, but my XGBoost model indicated that it more purposefully generated applicable interpretations of what elements were contributing to the assignment of codes, even if it was not very successful at correctly assigning such codes. As such, I decided it would be important to assess the cases in which logistic regression was correctly classifying a document while XGBoost failed to do so in order to examine if there are systematic issues with the errors XGBoost was making. 
+
+
+```{r, echo = FALSE, include = FALSE}
+
+set.seed(42)
+
+label <- "nationalism"
+
+# Get true labels
+y <- Y_all[train_idx, label]
+
+# Logistic regression predictions
+log_model <- multi_cv_results[[label]]$model
+log_probs <- predict(log_model, X_train, s = "lambda.min", type = "response")
+log_preds <- ifelse(log_probs > 0.3, 1, 0)
+
+# XGBoost predictions (for Fold1 only)
+xgb_pred_df <- xgb_cv_results[[label]]$model$pred
+xgb_pred_fold1 <- xgb_pred_df %>% filter(Resample == "Fold1")
+xgb_preds <- ifelse(xgb_pred_fold1$yes >= 0.3, 1, 0)
+
+# Get matched row indices
+fold1_indices <- as.integer(xgb_pred_fold1$rowIndex)
+
+# Build comparison dataframe
+comparison_df <- tibble(
+  quote = df5$QUOTE[fold1_indices],
+  truth = y[fold1_indices],
+  logistic = log_preds[fold1_indices],
+  xgb = xgb_preds,
+  xgb_prob = xgb_pred_fold1$yes,
+  log_prob = as.numeric(log_probs[fold1_indices])
+)
+
+# Filter: logistic correct, xgb incorrect
+log_right_xgb_wrong <- comparison_df %>%
+  filter(truth == logistic, truth != xgb)
+
+# Show examples
+log_right_xgb_wrong %>% select(quote, truth, logistic, xgb, log_prob, xgb_prob) %>% dplyr::slice(1:5)
+
+
+```
+
+```{r, echo = FALSE, include = FALSE}
+# 
+# label <- "nationalism"
+# 
+# # Top logistic terms
+# log_terms <- multi_coef_df_list[[label]] %>%
+#   arrange(desc(abs(coef))) %>%
+#   slice_head(n = 10) %>%
+#   pull(term)
+# 
+# # Top XGBoost terms
+# xgb_terms <- xgb_importance_list[[label]] %>%
+#   arrange(desc(Overall)) %>%
+#   slice_head(n = 10) %>%
+#   pull(term)
+# 
+# # Tokenize quotes and compare overlaps
+# compare_terms <- log_right_xgb_wrong %>%
+#   mutate(tokens = map(quote, ~ {
+#     toks <- word_tokenizer(tolower(.x))[[1]]
+#     if (length(toks) == 0 || all(is.na(toks))) return(character(0))
+#     toks[!toks %in% stopwords("en")]
+#   })) %>%
+#   mutate(
+#     log_terms_present = map(tokens, ~ intersect(., log_terms)),
+#     xgb_terms_present = map(tokens, ~ intersect(., xgb_terms))
+#   ) %>%
+#   mutate(
+#     log_terms_str = sapply(log_terms_present, toString),
+#     xgb_terms_str = sapply(xgb_terms_present, toString)
+#   ) %>%
+#   select(quote, log_terms_str, xgb_terms_str, xgb_prob, log_prob)
+# 
+# 
+# print(compare_terms %>% dplyr::slice(1:5))
+
+```
+
+```{r, echo = FALSE, include = FALSE}
+
+# 1. Select true labels for 'nationalism'
+label <- "nationalism"
+y <- Y_all[train_idx, label]
+
+# 2. Get predicted probabilities from both models
+log_model <- multi_cv_results[[label]]$model
+log_probs <- predict(log_model, X_train, s = "lambda.min", type = "response")
+log_preds <- ifelse(log_probs > 0.3, 1, 0)
+
+xgb_preds_raw <- xgb_cv_results[[label]]$model$pred
+xgb_preds_fold <- xgb_preds_raw[xgb_preds_raw$Resample == "Fold1", ]
+xgb_preds <- ifelse(xgb_preds_fold$yes >= 0.3, 1, 0)
+
+# 3. Get matching indices for comparison
+matching_ids <- as.integer(rownames(xgb_preds_fold))
+
+comparison_df <- tibble(
+  index = matching_ids,
+  quote = df5$QUOTE[matching_ids],
+  truth = y[matching_ids],
+  logistic = log_preds[matching_ids],
+  xgb = xgb_preds
+)
+
+# 4. Filter for cases where logistic was right and XGBoost was wrong
+log_right_xgb_wrong <- comparison_df %>%
+  filter(truth == logistic & truth != xgb)
+
+# Choose one example index
+example_idx <- log_right_xgb_wrong$index[1]  # or pick manually
+example_quote <- df5$clean_quote[example_idx]
+cat("QUOTE:\n", df5$QUOTE[example_idx])
+
+# 5. Logistic regression: Feature contribution
+log_coefs <- as.matrix(coef(log_model, s = "lambda.min"))[-1, , drop = FALSE]
+terms <- rownames(log_coefs)
+x_quote <- X_train[example_idx, ]
+
+log_contrib_df <- data.frame(
+  term = terms,
+  tfidf = as.vector(x_quote),
+  coef = as.vector(log_coefs),
+  contribution = as.vector(x_quote %*% log_coefs)
+) %>%
+  filter(tfidf > 0) %>%
+  arrange(desc(abs(contribution)))
+
+# 6. XGBoost: Top features for 'nationalism'
+xgb_terms <- xgb_importance_list[[label]] %>%
+  arrange(desc(Overall)) %>%
+  slice_head(n = 10) %>%
+  pull(term)
+
+# Tokenize example quote
+tokens <- word_tokenizer(tolower(example_quote))[[1]]
+tokens <- tokens[!tokens %in% stopwords::stopwords("en")]
+
+# Check overlap with top terms
+xgb_overlap <- intersect(tokens, xgb_terms)
+log_overlap <- intersect(tokens, log_contrib_df$term)
+
+# 7. Print results
+cat("\n\nLogistic Regression Top Contributors:\n")
+print(log_contrib_df[1:10, ])
+
+cat("\n\nXGBoost Top Terms Present in Quote:\n")
+print(xgb_overlap)
+
+cat("\n\nLogistic Top Terms Present in Quote:\n")
+print(log_overlap)
+
+
+
+```
+
+```{r, include = FALSE, echo = FALSE}
+
+cat("QUOTE:\n\n", df5$QUOTE[example_idx])
+
+
+```
+
+```{r, include = FALSE, echo = FALSE}
+
+knitr::kable(head(log_contrib_df, 10), caption = "Top Contributing Terms (Logistic Regression)")
+
+```
+
+```{r, include = FALSE, echo = FALSE}
+
+# Join as comma-separated strings for reporting
+log_overlap_str <- paste(log_overlap, collapse = ", ")
+xgb_overlap_str <- paste(xgb_overlap, collapse = ", ")
+
+cat("**Words from the quote that overlap with top logistic regression terms:**", log_overlap_str, "\n\n")
+cat("**Words from the quote that overlap with top XGBoost terms:**", xgb_overlap_str)
+
+
+```
+
+> The first avenue I pursued in trying to examine this was by examining the instances in which XGBoost got the label incorrectly while logistic regression was correct. I examined a random selection of examples across the codes. 
+
+```{r, echo = FALSE}
+
+inspect_disagreement <- function(label, quote_number = 1) {
+  # 1. Get true labels
+  y <- Y_all[train_idx, label]
+  
+  # 2. Logistic regression predictions
+  log_model <- multi_cv_results[[label]]$model
+  log_probs <- predict(log_model, X_train, s = "lambda.min", type = "response")
+  log_preds <- ifelse(log_probs > 0.3, 1, 0)
+  
+  # 3. XGBoost predictions (from Fold1)
+  xgb_preds_raw <- xgb_cv_results[[label]]$model$pred
+  xgb_preds_fold <- xgb_preds_raw[xgb_preds_raw$Resample == "Fold1", ]
+  xgb_preds <- ifelse(xgb_preds_fold$yes >= 0.3, 1, 0)
+  matching_ids <- as.integer(rownames(xgb_preds_fold))
+  
+  # 4. Create comparison dataframe
+  comparison_df <- tibble(
+    quote = df5$QUOTE[matching_ids],
+    truth = y[matching_ids],
+    logistic = log_preds[matching_ids],
+    xgb = xgb_preds,
+    log_prob = log_probs[matching_ids],
+    xgb_prob = xgb_preds_fold$yes
+  )
+  
+  # 5. Filter to logistic correct, XGB wrong
+  log_right_xgb_wrong <- comparison_df %>%
+    filter(truth == logistic & truth != xgb)
+  
+  if (nrow(log_right_xgb_wrong) < quote_number) {
+    message("Not enough disagreement examples found for this label.")
+    return(NULL)
+  }
+  
+  # 6. Pick the quote
+  selected <- log_right_xgb_wrong[quote_number, ]
+  selected_idx <- which(df5$QUOTE == selected$quote)
+  
+cat("----- QUOTE -----\n")
+cat(selected$quote, "\n\n")
+cat("All True Codes: ", paste(df5$code_list[[selected_idx]], collapse = ", "), "\n")
+cat("Target Label: ", label, "\n")
+cat("Logistic Prediction: ", selected$logistic, " (Prob:", round(selected$log_prob, 3), ")\n")
+cat("XGBoost Prediction: ", selected$xgb, " (Prob:", round(selected$xgb_prob, 3), ")\n\n")
+
+  # 7. Logistic feature contributions
+  coefs <- as.matrix(coef(log_model, s = "lambda.min"))
+  x_quote <- X_train[selected_idx, ]
+  
+  contribs <- as.vector(x_quote %*% coefs[-1, , drop = FALSE])
+  terms <- rownames(coefs)[-1]
+  
+  contrib_df <- data.frame(
+    term = terms,
+    tfidf = as.vector(x_quote),
+    coef = as.vector(coefs[-1, ]),
+    contribution = contribs
+  ) %>%
+    filter(tfidf > 0) %>%
+    arrange(desc(abs(contribution))) %>%
+    slice_head(n = 10)
+  
+  cat("----- LOGISTIC CONTRIBUTIONS -----\n")
+  print(contrib_df)
+  
+  # 8. Compare top terms
+  log_terms <- multi_coef_df_list[[label]] %>%
+    slice_max(order_by = abs(coef), n = 10) %>%
+    pull(term)
+  
+  xgb_terms <- xgb_importance_list[[label]] %>%
+    slice_max(order_by = Overall, n = 10) %>%
+    pull(term)
+  
+  tokens <- word_tokenizer(tolower(selected$quote))[[1]]
+  tokens <- tokens[!tokens %in% stopwords("en")]
+  
+  cat("\nTop Logistic Terms Present:", paste(intersect(tokens, log_terms), collapse = ", "), "\n")
+  cat("Top XGBoost Terms Present:", paste(intersect(tokens, xgb_terms), collapse = ", "), "\n")
+}
+
+```
+
+```{r, echo = FALSE}
+
+inspect_disagreement(label = "Indian_identity", quote_number = 8)
+
+```
+
+```{r, echo = FALSE}
+
+inspect_disagreement(label = "nationalism", quote_number = 1)
+
+```
+
+```{r, echo = FALSE}
+
+inspect_disagreement(label = "party_polarization", quote_number = 5)
+
+```
+
+> The logistic regression model appears to have correctly classified many of the quotes by leveraging a broader set of moderately weighted terms which contributed to the final correct decision, but none of which appear in the top 10 terms for predicting the relevant code. XGBoost, in contrast, often has important terms for the code in the document but incorrectly classifies. This could be in part because the presence of such features becomes overpowering in determining the code for the model whereas logistic regression is somehow able to pick up on less deterministic features.
+
+
+```{r, echo = FALSE}
+
+# Initialize a list to store probabilities by label
+xgb_disagree_probs <- list()
+
+for (label in valid_labels) {
+  # Get true labels
+  y <- Y_all[train_idx, label]
+
+  # Get logistic predictions
+  log_model <- multi_cv_results[[label]]$model
+  log_probs <- predict(log_model, X_train, s = "lambda.min", type = "response")
+  log_preds <- ifelse(log_probs > 0.3, 1, 0)
+
+  # Get XGBoost predictions
+  xgb_model <- xgb_cv_results[[label]]$model
+  if (is.null(xgb_model)) next
+  xgb_fold_preds <- xgb_model$pred %>% filter(Resample == "Fold1")
+  if (nrow(xgb_fold_preds) == 0) next
+
+  # Get matching row indices
+  fold1_indices <- as.integer(xgb_fold_preds$rowIndex)
+  if (any(is.na(fold1_indices))) next
+
+  # True labels and predictions
+  y_fold1 <- y[fold1_indices]
+  log_fold1 <- log_preds[fold1_indices]
+  xgb_fold1 <- ifelse(xgb_fold_preds$yes >= 0.3, 1, 0)
+
+  # Filter disagreement cases: logistic correct, XGB wrong
+  mask <- which(log_fold1 == y_fold1 & xgb_fold1 != y_fold1)
+
+  if (length(mask) > 0) {
+    xgb_disagree_probs[[label]] <- tibble(
+      label = label,
+      xgb_prob = xgb_fold_preds$yes[mask]
+    )
+  }
+}
+
+# Combine into one dataframe
+xgb_disagree_df <- bind_rows(xgb_disagree_probs)
+
+# Plot distribution
+ggplot(xgb_disagree_df, aes(x = xgb_prob)) +
+  geom_histogram(binwidth = 0.05, fill = "tomato", color = "white") +
+  facet_wrap(~ label, scales = "free_y") +
+  geom_vline(xintercept = 0.3, linetype = "dashed", color = "gray40") +
+  labs(
+    title = "XGBoost Probabilities for Disagreements (Logistic Correct, XGBoost Wrong)",
+    x = "XGBoost Predicted Probability",
+    y = "Count"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+> Additionally, the sample of quotes highlights that many of the XGBoost predictions generate probabilities that are close to or around the 0.3 cutoff. As such, the above graphs depict the distribution of probabilities predicted by XGBoost relative to the cutoff. These graphs indicate that for some of these codes in which XGBoost failed but logistic succeeded-- namely **Indian_identity**, **communalism**, **democracy**, and **people**-- many of  XGBoost's predictions for the documents fall close to the 0.3 threshold cut-off. Selecting the correct cut-off is a hard balance to strike, as 0.3 was already a major improvement from the standard 0.5, but there is perhaps further tuning that can be done to make the model even more successful. 
+
+> Given these illuminations from the above examinations of the two models, it is worthwhile to see how both generalize to the test set. 
+
+```{r, echo = FALSE, include = FALSE}
+
+log_test_results <- list()
+
+for (label in valid_labels) {
+  cat("Evaluating logistic model on test for:", label, "\n")
+
+  model <- multi_cv_results[[label]]$model
+  y_true <- Y_test[, label]
+
+  probs <- predict(model, X_test, s = "lambda.min", type = "response")
+  preds <- ifelse(probs > 0.3, 1, 0)
+
+  TP <- sum(preds == 1 & y_true == 1)
+  FP <- sum(preds == 1 & y_true == 0)
+  FN <- sum(preds == 0 & y_true == 1)
+  TN <- sum(preds == 0 & y_true == 0)
+
+  acc <- (TP + TN) / (TP + FP + FN + TN)
+  prec <- ifelse((TP + FP) == 0, NA, TP / (TP + FP))
+  rec  <- ifelse((TP + FN) == 0, NA, TP / (TP + FN))
+
+  log_test_results[[label]] <- tibble(
+    Label = label,
+    Accuracy = acc,
+    Precision = prec,
+    Recall = rec
+  )
+}
+
+log_test_df <- bind_rows(log_test_results)
+
+
+```
+```{r, echo = FALSE, include = FALSE}
+
+# 1. Use the same tokenizer/prep function
+it_test <- itoken(df5$clean_quote[test_idx],
+                  preprocessor = prep_fun,
+                  tokenizer = tok_fun,
+                  progressbar = TRUE)
+
+# 2. Use the SAME vectorizer from training
+dtm_test <- create_dtm(it_test, vectorizer_xgb)  # <- re-use training vectorizer!
+
+# 3. Apply the SAME tf-idf transformation
+X_test_xgb <- tfidf_xgb$transform(dtm_test)      # <- use transform(), not fit_transform()
+
+```
+
+
+```{r, echo = FALSE, include = FALSE}
+
+xgb_test_results <- list()
+
+for (label in valid_labels) {
+  cat("Evaluating XGBoost model on test for:", label, "\n")
+
+  model <- xgb_cv_results[[label]]$model
+  y_true <- Y_test[, label]
+
+  # Predict using final fitted model
+predict(model, newdata = as.data.frame(as.matrix(X_test_xgb)), type = "prob")[, "yes"]
+  bin_preds <- ifelse(preds >= 0.3, 1, 0)
+
+  TP <- sum(bin_preds == 1 & y_true == 1)
+  FP <- sum(bin_preds == 1 & y_true == 0)
+  FN <- sum(bin_preds == 0 & y_true == 1)
+  TN <- sum(bin_preds == 0 & y_true == 0)
+
+  acc <- (TP + TN) / (TP + FP + FN + TN)
+  prec <- ifelse((TP + FP) == 0, NA, TP / (TP + FP))
+  rec  <- ifelse((TP + FN) == 0, NA, TP / (TP + FN))
+
+  xgb_test_results[[label]] <- tibble(
+    Label = label,
+    Accuracy = acc,
+    Precision = prec,
+    Recall = rec
+  )
+}
+
+xgb_test_df <- bind_rows(xgb_test_results)
+
+
+```
+
+```{r, echo = FALSE}
+
+
+# Create tables per code
+for (label in valid_labels) {
+  cat("\n==============================\n")
+  cat("Performance for:", toupper(label), "\n")
+
+  log_row <- log_test_df %>% filter(Label == label)
+  xgb_row <- xgb_test_df %>% filter(Label == label)
+
+  comparison_table <- tibble::tibble(
+    Model = c("Logistic", "XGBoost"),
+    Precision = c(log_row$Precision, xgb_row$Precision),
+    Recall = c(log_row$Recall, xgb_row$Recall),
+    Accuracy = c(log_row$Accuracy, xgb_row$Accuracy)
+  )
+
+  print(comparison_table)
+}
+
+
+```
+
+> Despite cross-validated performance on the training set, the XGBoost model somewhat entirely failed to generalize effectively to the test set, as evidenced by the essentially zero performances in precision, recall, and accuracy across all codes. This discrepancy likely stems from a combination of factors: the small size of the overall dataset, substantial class imbalance (with some codes having very few positive examples), and the relatively high variance in document structure and language across quotes. In comparison, the logistic regression model generalized reasonably well on some codes, but also failed in others. Even with upsampling and threshold tuning, the XGBoost model may have overfit to the patterns in the training set, capturing noise or overly specific features that did not translate to the test set. Additionally, the quotes were hand-selected and semantically rich, so the linguistic patterns the models learned to rely on may not hold consistently outside of the training distribution, limiting generalizability. Realistically, despite being what I put forward, the XGBoost model is definitely not in a position to be presented in a formal applied setting, but perhaps there are further means of tuning and additional data collection that can allow for this model to be servicable. 
+
+***
+
+# Conclusion
+
+> Very broadly, this project sought to generate a natural language processing model using machine learning algorithms that can classify historical dialectical data (i.e. transcripts of speeches, correspondences, etc.) into categories (or “codes” as it is often referred to in the social sciences) for further analysis. In the specific context of my senior sociology thesis, the model I generated is trained to take segments of speeches from Prime Minister of India, Indira Gandhi, and classify them into a range of codes relating to nationalism, Indian identity, and specific political issues that were relevant to her tenure. While this model was curated for my particular needs as a student whose interests lie in historical sociology, discourse analysis, and studies of nationalism, a model such as this one is useful in extracting time-saving techniques for other social science researchers who are interested in language-driven and discourse-driven data. Manual coding– while necessary– is intensely time consuming and many researchers could benefit from having resources redirected. Building a robust model for organizing the bulk of the data instead of being put in a position where all of it must be done by hand could be a valuable addition to conducting social science research. 
+
+> Given more time, there are numerous ways the infantile groundwork I've laid out with this XGBoost model could be vastly improved. As already mentioned, a larger dataset with more documents (and a wider range of documents-- not just "important" ones) would surely vastly improve the performance of the model and likely aid in better generalizability and discriminatory abilities between the different codes. I am confident that additional tuning measures for the XGBoost model could've produced better recall results, as well, an avenue I would've liked to explore more if I had additional time. If there was also more time, continuing more systematically to examine disagreements and misclassifications to refine feature engineering and data labeling would be another worthwhile endeavor to pursue. It also would've been interesting to pursue an examination of the cross-over between codes and documents, as many documents had multiple codes assigned to it-- perhaps, the misclassifications of some of the models was, in part, due to the fact that some codes share some sort of relationship with one another. 
+
+> Even though my model has largely failed in application to the test set, the results of the training and curation of the model has provided meaningful insights into how machine learning algorithms can pick up on semiotics in the context of nuanced and complex dialectic historical data! 
+ 

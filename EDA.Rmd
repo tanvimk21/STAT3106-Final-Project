@@ -1,0 +1,178 @@
+---
+title: "REASONABLE STUPID MODEL"
+output: html_document
+date: "2025-05-05"
+---
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(broom)
+library(car)
+library(Metrics)
+library(caret)
+library(lubridate)
+library(tidyr)
+library(biglm)
+library(ranger)
+library(pROC)
+library(Matrix)
+library(glmnet)
+library(randomForest)
+library(readr) 
+library(stringr)
+library(reshape2)
+library(lubridate)
+library(rsample)
+library(text2vec)
+library(glmnet) 
+library(Matrix)
+library(caret) 
+library(tibble)
+library(patchwork)
+library(forcats)
+
+knitr::opts_chunk$set(fig.align = "center")
+```
+
+# REASONABLE BUT STUPID MODEL: INDIVIDUAL BINARY CLASSIFIER MODELS
+
+> You do not need to remake your X_all, X_train, or X_test matrices — your TF-IDF matrix stays the same.
+> What does change is how you build the Y_train and Y_test targets:
+You’ll now extract one column at a time from the label matrix for each individual classifier.
+=dfdf
+### Start off one logistic model per code
+
+> NOTE: Many classes have been excluded from modeling due to insufficient training samples, which would make logistic regression unreliable and prevent stable cross-validation.
+
+> The ones we will keep are colonialism"        "communalism"        "democracy"          "emotions"           "Indian_identity"   
+[6] "nationalism"        "party_polarization" "people"
+
+
+```{r}
+
+label_counts <- colSums(Y_all[train_idx, ])
+
+# Define labels to use (excluding rare ones)
+valid_labels <- names(label_counts[label_counts >= 15])
+
+```
+
+
+```{r}
+
+# Initialize results list
+cv_results <- list()
+coef_df_list <- list()
+
+for (label in valid_labels) {
+  cat("\n===============================\n")
+  cat("Cross-validating model for:", label, "\n")
+  
+  y_train <- Y_all[train_idx, label]
+  
+  # Train model with internal cross-validation
+  model <- cv.glmnet(X_train, y_train, family = "binomial", alpha = 0, nfolds = 5)
+  
+  # Cross-validated predictions on training data
+  probs <- predict(model, X_train, s = "lambda.min", type = "response")
+  preds <- ifelse(probs > 0.5, 1, 0)
+  
+  # Ground truth
+  actuals <- y_train
+  
+  # Confusion elements
+  TP <- sum(preds == 1 & actuals == 1)
+  FP <- sum(preds == 1 & actuals == 0)
+  FN <- sum(preds == 0 & actuals == 1)
+  TN <- sum(preds == 0 & actuals == 0)
+  
+  # Metrics
+  acc <- (TP + TN) / (TP + TN + FP + FN)
+  prec <- ifelse((TP + FP) == 0, NA, TP / (TP + FP))
+  rec <- ifelse((TP + FN) == 0, NA, TP / (TP + FN))
+  
+  cv_results[[label]] <- list(
+    accuracy = acc,
+    precision = prec,
+    recall = rec,
+    model = model
+  )
+  
+  # Extract top coefficients
+  coefs <- as.matrix(coef(model, s = "lambda.min"))
+  coefs_df <- data.frame(term = rownames(coefs), coef = coefs[,1]) %>%
+    filter(term != "(Intercept)", coef != 0) %>%
+    arrange(desc(abs(coef))) %>%
+    mutate(label = label)
+  
+  coef_df_list[[label]] <- coefs_df
+}
+
+```
+```{r}
+
+summary_df <- tibble(
+  Label = valid_labels,
+  Accuracy = sapply(cv_results, function(x) x$accuracy),
+  Precision = sapply(cv_results, function(x) x$precision),
+  Recall = sapply(cv_results, function(x) x$recall)
+)
+
+print(summary_df)
+
+
+```
+
+### INTERPRET
+
+> A classic result in imbalanced classification. For instance:
+Let’s say only 10 quotes out of 100 are about colonialism
+If the model predicts “no colonialism” for every quote, it still gets 90% accuracy
+But it misses all 10 true positives → recall = 0
+That’s exactly what you see here for colonialism and people:
+High accuracy (~90%)
+Precision = NA (no positive predictions made)
+Recall = 0 (none of the actual positive cases were found)
+
+
+> Party polarization, for example:
+Accuracy: 0.74 – a bit lower
+Precision: 1 – when it did say a quote was about polarization, it was right
+Recall: 0.03 – but it almost never said so
+This model is too conservative — it's barely detecting anything.
+
+> If precision is high, that means when your model says “this quote is about emotions”, it’s almost always correct — good for precision-critical tasks
+If recall is low, it means it's missing a lot of true emotional quotes — bad for discovering new relevant material
+If accuracy is high but recall is low, your model is playing it safe and defaulting to “not this code”
+
+```{r}
+
+# Set number of top terms to show per plot
+top_n <- 10
+
+# Create list of plots
+plot_list <- lapply(valid_labels, function(label) {
+  top_features <- coef_df_list[[label]] %>%
+    slice_max(order_by = abs(coef), n = top_n) %>%
+    mutate(term = fct_reorder(term, coef))
+  
+  ggplot(top_features, aes(x = term, y = coef)) +
+    geom_col(fill = "steelblue") +
+    coord_flip() +
+    labs(title = label, x = NULL, y = "TF-IDF Weight") +
+    theme_minimal(base_size = 10)
+})
+
+```
+
+```{r}
+
+wrap_plots(plot_list, ncol = 4)
+
+```
+### INTERPRET
+> Positive weight: the presence of this word increases the likelihood that the quote is about the target theme (e.g., "nationalism")
+> Negative weight: the presence of this word decreases the likelihood (i.e., makes it more likely the quote is not about nationalism)
+

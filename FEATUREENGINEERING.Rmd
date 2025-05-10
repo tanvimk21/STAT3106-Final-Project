@@ -1,0 +1,88 @@
+---
+title: "FEATURE ENGINEERING"
+output: html_document
+date: "2025-05-10"
+---
+
+## Feature Engineering
+
+> In order to generate a trainable dataset, we must preprocess the data and conduct feature engineering. The dataset was first split into a 80-20 testing and training set with a stratified sampling method to ensure all codes were proportionally represented in the training and test sets. I then engineered the features by using a TF-IDF algorithm, which separated each quote into tokens (the features) that mapped onto one word, with capitalization, punctuation, and typical stopwords removed. Rare words (appear < 3 times) and overused words (appear in > 90% of quotes) were also removed. With the tokens as the columns, the TF-IDF matrix was populated by generating the product of the token’s frequency in that quote with the inverse of how frequently it appears across all quotes. 
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+df4 <- df3 %>%
+  mutate(label_count = lengths(code_list))
+
+df5 <- df4 %>%
+  mutate(clean_quote = QUOTE %>%
+           tolower() %>%
+           str_replace_all("[^a-z\\s]", "") %>%
+           str_replace_all("\\s+", " ") %>%
+           str_trim())
+
+```
+
+```{r, include = FALSE, echo=FALSE, include = FALSE, message=FALSE}
+set.seed(42)
+
+# Step 2: Train/test split before feature engineering
+split <- initial_split(df5, prop = 0.8, strata = label_count)
+train_idx <- as.integer(split$in_id)
+test_idx <- setdiff(seq_len(nrow(df5)), train_idx)
+
+train_quotes <- df5$clean_quote[train_idx]
+test_quotes  <- df5$clean_quote[test_idx]
+
+```
+
+```{r, include = FALSE, echo=FALSE}
+set.seed(42)
+
+# Step 3: Tokenization setup
+prep_fun <- tolower
+stop_words <- stopwords("en")
+tok_fun <- function(x) {
+  tokens <- word_tokenizer(x)
+  lapply(tokens, function(words) words[!words %in% stop_words])
+}
+
+# Step 4: Tokenize + create vocabulary on training data
+it_train <- itoken(train_quotes, preprocessor = prep_fun, tokenizer = tok_fun)
+vocab <- create_vocabulary(it_train)
+vocab <- prune_vocabulary(vocab, term_count_min = 3, doc_proportion_max = 0.9)
+vectorizer <- vocab_vectorizer(vocab)
+
+# Step 5: Create TF-IDF matrices
+# Training
+dtm_train <- create_dtm(it_train, vectorizer)
+tfidf <- TfIdf$new()
+X_train <- tfidf$fit_transform(dtm_train)
+
+```
+
+> The target or Y matrix, as shown below, was made by doing one-hot encoding for all our target categories, in which columns are codes (like emotions, communalism_caste) and entries are 0 or 1 (whether that code applies to the quote). 
+
+```{r, echo = FALSE}
+set.seed(42)
+
+# Test (using same vocab and TF-IDF model)
+it_test <- itoken(test_quotes, preprocessor = prep_fun, tokenizer = tok_fun)
+dtm_test <- create_dtm(it_test, vectorizer)
+X_test <- tfidf$transform(dtm_test)
+
+# Step 6: Create multi-label Y matrices
+all_codes <- sort(unique(unlist(df5$code_list)))
+code_cols <- str_replace_all(all_codes, "[^[:alnum:]]+", "_")
+
+# Add binary indicator columns for each code
+df5[code_cols] <- lapply(all_codes, function(code) {
+  sapply(df5$code_list, function(x) as.integer(code %in% x))
+})
+
+Y_all <- as.matrix(df5[, code_cols])
+Y_train <- Y_all[train_idx, ]
+Y_test <- Y_all[test_idx, ]
+
+head(Y_train[,c(3,4,5,7,8,10,11, 12, 13)])
+```
